@@ -1,5 +1,6 @@
-pandas
-google-api-python-client
-python-dotenv
-vaderSentiment
-matplotlib
+pandas>=2.0
+google-api-python-client>=2.100
+python-dotenv>=1.0
+vaderSentiment>=3.3.2
+matplotlib>=3.8
+pytest>=8.0
