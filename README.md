@@ -1,160 +1,94 @@
 # YouTube Comment Sentiment Analyzer
 
-Analyze audience opinions by collecting comments from YouTube videos, classifying their sentiment, and exporting the results for further analysis.
+Collect at least 2,000 comments from YouTube videos, classify each as **Positive**, **Neutral** or **Negative** with VADER, run exploratory data analysis (EDA), and export a CSV plus charts.
 
-## Overview
+## What it does
 
-**YouTube Comment Sentiment Analyzer** is a Python-based data analysis project designed to turn YouTube comments into structured, useful insights. It processes comments and categorizes them as **Positive**, **Negative**, or **Neutral**, then saves the classified results to a file for review and further analysis.
+1. Fetches top-level comments through the YouTube Data API v3 (one or more videos).
+2. Cleans the text (HTML entities, URLs, whitespace) and removes empty and duplicate comments.
+3. Scores every comment with VADER and labels it using the standard thresholds: compound >= 0.05 is Positive, <= -0.05 is Negative, otherwise Neutral.
+4. Saves `output/classified_comments.csv` and `output/sentiment_distribution.png`.
+5. Runs EDA and saves tables and charts to `output/`.
 
-## Features
+## Setup
 
-- **YouTube comment collection** — gather comments from a target video using the project's configured collection method.
-- **Text preprocessing** — prepare comment text for analysis.
-- **Sentiment classification** — label comments as positive, negative, or neutral.
-- **Sentiment analytics** — summarize the distribution of sentiment categories.
-- **Export results** — save classified comments and related fields in a structured output file, such as CSV.
-- **Reusable workflow** — analyze another video by supplying a different video URL or ID, depending on the implementation.
-
-## Workflow
-
-1. Provide a YouTube video URL or ID.
-2. Collect available comments.
-3. Clean and preprocess the comment text.
-4. Analyze each comment's sentiment.
-5. Assign a sentiment label: `Positive`, `Negative`, or `Neutral`.
-6. Calculate summary statistics and export the classified comments.
-
-## Example Output
-
-| Comment | Sentiment |
-|---|---|
-| "This video was really helpful!" | Positive |
-| "I didn't enjoy this explanation." | Negative |
-| "The video is 10 minutes long." | Neutral |
-
-*Illustrative examples only; actual labels depend on the classification method and the comment's context.*
-
-A possible exported CSV structure:
-
-```csv
-comment,sentiment
-"This video was really helpful!",Positive
-"I didn't enjoy this explanation.",Negative
-"The video is 10 minutes long.",Neutral
-```
-
-## Tech Stack
-
-- **Python** — core implementation
-- **Data collection tools / YouTube API** — depends on the configured collection method
-- **Text-processing and sentiment-analysis libraries** — based on the implementation
-- **Pandas** — optional, for tabular data processing and CSV export
-- **Matplotlib / Seaborn** — optional, for visualizing sentiment distributions
-
-> Update this section to list only the libraries and tools actually used in your project.
-
-## Getting Started
-
-### Prerequisites
-
-- Python 3.10 or a compatible version
-- Git
-- Any API credentials required by your chosen YouTube data collection method
-
-### Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/YOUR-USERNAME/youtube-comment-sentiment-analyzer.git
-cd youtube-comment-sentiment-analyzer
-```
-
-Create and activate a virtual environment (recommended):
-
-**Windows**
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
-```
-
-**macOS / Linux**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS / Linux
 pip install -r requirements.txt
 ```
 
-> If your repository does not yet include `requirements.txt`, create it with the project's actual dependencies before running this command.
+Create a YouTube Data API v3 key in Google Cloud Console, then copy `.env.example` to `.env` and paste the key:
 
-### Run the Project
-
-Run the entry-point script used by your project. For example:
-
-```bash
-python main.py
+```
+YOUTUBE_API_KEY=your_key_here
 ```
 
-Replace `main.py` with your actual script name if it differs. Add any required setup, API configuration, or command-line arguments here.
+## Run
 
-## Project Structure
+```bash
+python main.py --videos https://www.youtube.com/watch?v=VIDEO_ID_1 VIDEO_ID_2 --max-comments 2500
+```
 
-The structure below is a suggested layout. Adjust it to match your repository.
+Running `python main.py` with no arguments prompts for the video URLs instead.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--videos` | One or more video URLs or IDs | prompt |
+| `--max-comments` | Total comments to collect across videos | 2500 |
+| `--order` | `relevance` or `time` | relevance |
+| `--output-dir` | Where results are written | output |
+| `--demo` | Synthetic offline data to test the pipeline (writes to `output_demo/`) | off |
+
+Pick videos with enough comments. If fewer than 2,000 unique comments remain after cleaning, the program prints a warning; add more videos.
+
+## Output files
+
+| File | Description |
+|---|---|
+| `output/classified_comments.csv` | video_id, comment, clean_comment, author, published_at, like_count, reply_count, sentiment, sentiment_score |
+| `output/sentiment_distribution.png` | Bar chart of sentiment counts and percentages |
+| `output/eda_summary.txt` | Text summary of the EDA tables and top words |
+| `output/eda_*.csv` | Distribution, per-sentiment statistics, overall descriptive statistics |
+| `output/eda_score_histogram.png` | Histogram of VADER compound scores |
+| `output/eda_length_by_sentiment.png` | Comment length by sentiment |
+| `output/eda_sentiment_over_time.png` | Sentiment counts over time |
+| `output/eda_top_words.png` | Most frequent words per sentiment |
+
+## Project structure
 
 ```text
 youtube-comment-sentiment-analyzer/
-├── data/                 # Raw or processed data (if stored locally)
-├── output/               # Exported classified comments
-├── src/                  # Project source code (optional)
-├── main.py               # Application entry point (example)
-├── requirements.txt      # Python dependencies
+├── main.py              # collection, cleaning, sentiment, CSV and chart
+├── eda.py               # exploratory data analysis
+├── demo_data.py         # synthetic data for offline testing
+├── tests/
+│   └── test_sentiment.py
+├── docs/
+│   └── Methodology.docx
+├── output/              # results (generated)
+├── CHANGELOG.md         # additions made to the original project
+├── requirements.txt
+├── .env.example
 ├── .gitignore
 └── README.md
 ```
 
-## Use Cases
+## Tests
 
-- Understand audience reactions to video content.
-- Explore common positive and negative feedback.
-- Review sentiment patterns in educational, entertainment, or product-related videos.
-- Create structured datasets for further data analysis or machine-learning experiments.
+```bash
+python -m pytest tests
+```
 
 ## Limitations
 
-- Sentiment classification is not always accurate, especially for sarcasm, slang, mixed opinions, emojis, or context-dependent language.
-- Collected comments depend on the availability of comments and the chosen collection method.
-- Sentiment labels indicate estimated tone; they do not establish whether a comment is factually correct.
-- Analytics reflect the collected sample, not necessarily the views of every person who watched the video.
+- VADER is lexicon-based and tuned for English; sarcasm, slang, mixed opinions and non-English comments can be misclassified.
+- Results reflect the collected sample, not every viewer. Relevance ordering favours popular comments.
+- Sentiment labels describe tone, not whether a comment is factually correct.
 
-## Responsible Use
+## Responsible use
 
-- Follow YouTube's applicable Terms of Service, API policies, and rate limits.
-- Respect privacy and avoid collecting or publishing unnecessary personal information.
-- Use collected comments responsibly and explain relevant limitations when sharing results.
-- Keep API keys and credentials out of source control. Store secrets in environment variables or a local `.env` file, and exclude that file through `.gitignore`.
-
-## Future Improvements
-
-- Add sentiment distribution charts and dashboards.
-- Compare sentiment across multiple videos.
-- Extract frequently mentioned topics and keywords.
-- Support additional languages.
-- Evaluate classification quality against manually labeled examples.
-- Export reports in multiple formats.
-
-## Contributing
-
-Contributions, bug reports, and suggestions are welcome. Open an issue to discuss a proposed change before submitting a pull request.
-
-## License
-
-Choose a license before distributing the project. If you intend to use an open-source license, add the appropriate `LICENSE` file and update this section.
-
----
-
-**Built with Python for YouTube comment analysis and sentiment insights.**
+- Follow YouTube's Terms of Service, API policies and quota limits.
+- Do not publish personal information; author names are collected only for dataset completeness.
+- Never commit `.env`; it is already in `.gitignore`.
