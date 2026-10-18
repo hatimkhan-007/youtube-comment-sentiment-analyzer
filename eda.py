@@ -57,6 +57,15 @@ def top_words(df: pd.DataFrame, label: str, n: int = 10) -> list[tuple[str, int]
     return counter.most_common(n)
 
 
+def get_top_negative_comments(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    """Isolate and return the most relevant or most-liked negative comments."""
+    negatives = df[df["sentiment"] == "Negative"]
+    if negatives.empty:
+        return pd.DataFrame()
+    # Sort by like_count descending, then lowest sentiment score
+    return negatives.sort_values(by=["like_count", "sentiment_score"], ascending=[False, True]).head(n)
+
+
 def plot_score_histogram(df: pd.DataFrame, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.hist(df["sentiment_score"], bins=30, color="#4a78c2", edgecolor="white")
@@ -138,8 +147,17 @@ def run_eda(df: pd.DataFrame, output_dir: Path) -> None:
     for name, table in tables.items():
         table.to_csv(output_dir / f"eda_{name}.csv")
         lines += [name.replace("_", " ").title(), table.to_string(), ""]
+    
     for label in LABELS:
         lines.append(f"Top words ({label}): " + ", ".join(f"{w} ({c})" for w, c in top_words(data, label)))
+    
+    # Append top negative comments to summary
+    top_neg = get_top_negative_comments(data, n=5)
+    if not top_neg.empty:
+        lines.append("\nTop Negative Comments Caught:")
+        for _, row in top_neg.iterrows():
+            lines.append(f"- [Score: {row['sentiment_score']:.2f}, Likes: {row['like_count']}] {row['comment']}")
+
     (output_dir / "eda_summary.txt").write_text("\n".join(lines), encoding="utf-8")
 
     plot_score_histogram(data, output_dir / "eda_score_histogram.png")
