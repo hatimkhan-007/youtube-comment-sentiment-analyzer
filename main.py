@@ -1,6 +1,5 @@
 import argparse
 import html
-import os
 import re
 from pathlib import Path
 
@@ -20,118 +19,75 @@ MIN_REQUIRED_COMMENTS = 2000
 DEFAULT_TARGET = 2500
 LABELS = ["Positive", "Neutral", "Negative"]
 LABEL_COLORS = {"Positive": "#2e9e5b", "Neutral": "#8c8c8c", "Negative": "#d64545"}
+ANALYSIS_COLUMNS = [
+    "comment_id", "video_id", "comment", "clean_comment", "author", "published_at",
+    "like_count", "reply_count", "sentiment", "sentiment_score", "confidence",
+]
 
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
+MENTION_PATTERN = re.compile(r"@\S+")
 WHITESPACE_PATTERN = re.compile(r"\s+")
-
-
-def extract_video_id(video_url_or_id: str) -> str:
-    """Accept a YouTube video ID or common YouTube URL."""
-    value = video_url_or_id.strip()
-
-    if "youtu.be/" in value:
-        return value.split("youtu.be/", 1)[1].split("?", 1)[0].split("/", 1)[0]
-
-    if "youtube.com" in value:
-        if "v=" in value:
-            return value.split("v=", 1)[1].split("&", 1)[0]
-        for marker in ("/shorts/", "/embed/", "/live/"):
-            if marker in value:
-                return value.split(marker, 1)[1].split("?", 1)[0].split("/", 1)[0]
-
-    return value.split("?", 1)[0].split("/", 1)[0]
-
-
-def fetch_comments(video_id: str, max_comments: int, order: str = "relevance") -> list[dict]:
-    """Fetch up to max_comments top-level comments from a public video."""
-    from googleapiclient.discovery import build
-
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "YOUTUBE_API_KEY is missing. Add it to a .env file in the project folder."
-        )
-
-    youtube = build("youtube", "v3", developerKey=api_key)
-    comments = []
-    next_page_token = None
-
-    while len(comments) < max_comments:
-        response = youtube.commentThreads().list(
-            part="snippet",
-            videoId=video_id,
-            maxResults=min(100, max_comments - len(comments)),
-            pageToken=next_page_token,
-            textFormat="plainText",
-            order=order,
-        ).execute()
-
-        for item in response.get("items", []):
-            snippet = item["snippet"]["topLevelComment"]["snippet"]
-            comments.append({
-                "video_id": video_id,
-                "comment": snippet.get("textDisplay", ""),
-                "author": snippet.get("authorDisplayName", ""),
-                "published_at": snippet.get("publishedAt", ""),
-                "like_count": snippet.get("likeCount", 0),
-                "reply_count": item["snippet"].get("totalReplyCount", 0),
-            })
-
-        next_page_token = response.get("nextPageToken")
-        if not next_page_token:
-            break
-
-    return comments
-
-
-def collect_from_videos(video_ids: list[str], target: int, order: str) -> list[dict]:
-    """Collect comments across one or more videos until the target is reached."""
-    collected: list[dict] = []
-    for video_id in video_ids:
-        remaining = target - len(collected)
-        if remaining <= 0:
-            break
-        print(f"Fetching from video {video_id} (need {remaining} more)...")
-        batch = fetch_comments(video_id, remaining, order)
-        print(f"  got {len(batch)} comments")
-        collected.extend(batch)
-    return collected
+SPAM_PATTERN = re.compile(
+    r"bitcoin|crypto|forex|binance|telegram|whatsapp|\b\d{10,}\b|investment|earn\s*\$|"
+    r"\bdm me\b|click (the )?link|giveaway|sub4sub|subscribe to my|check (out )?my channel",
+    re.IGNORECASE,
+)
 
 
 def clean_text(text: str) -> str:
-    """Normalize a raw comment: unescape HTML, drop URLs, collapse whitespace."""
+    """Normalize a raw comment: unescape HTML, drop URLs and @mentions, collapse whitespace."""
     text = html.unescape(str(text))
     text = URL_PATTERN.sub(" ", text)
+    text = MENTION_PATTERN.sub(" ", text)
     return WHITESPACE_PATTERN.sub(" ", text).strip()
 
 
-def analyze_comments(comments: list[dict], engine: str = "xlmr") -> pd.DataFrame:
-    """Clean comment text and add sentiment labels and scores."""
-    columns = [
-        "video_id", "comment", "clean_comment", "author", "published_at",
-        "like_count", "reply_count", "sentiment", "sentiment_score",
-    ]
+def is_spam(text: str) -> bool:
+    return bool(SPAM_PATTERN.search(text))
+
+
+def analyze_comments(
+    comments: list[dict], engine: str = "xlmr", target: str = sentiment.DEFAULT_TARGET,
+    llm_model: str = sentiment.DEFAULT_LLM_MODEL, use_rules: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Clean, de-duplicate, remove spam, then score. Returns (analyzed, spam)."""
     df = pd.DataFrame(comments)
+    empty = pd.DataFrame(columns=ANALYSIS_COLUMNS)
 
     if df.empty:
-        return pd.DataFrame(columns=columns)
+        return empty, pd.DataFrame(columns=["comment_id", "video_id", "clean_comment"])
 
+    if "comment_id" not in df:
+        df["comment_id"] = [f"row{i}" for i in range(len(df))]
     for column in ("video_id", "author", "published_at"):
         if column not in df:
             df[column] = ""
+        df[column] = df[column].fillna("")
     for column in ("like_count", "reply_count"):
         if column not in df:
             df[column] = 0
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
 
     df["comment"] = df["comment"].fillna("").astype(str).str.strip()
     df["clean_comment"] = df["comment"].apply(clean_text)
     df = df[df["clean_comment"] != ""]
-    df = df.drop_duplicates(subset=["clean_comment"]).copy()
+    df = df.loc[~df["clean_comment"].str.lower().duplicated()].copy()
 
-    df["sentiment_score"] = sentiment.score_texts(df["clean_comment"].tolist(), engine)
-    df["sentiment"] = df["sentiment_score"].apply(sentiment.label_from_score)
+    spam_mask = df["clean_comment"].apply(is_spam)
+    spam = df.loc[spam_mask, ["comment_id", "video_id", "clean_comment"]]
+    df = df.loc[~spam_mask].copy()
 
-    return df[columns].reset_index(drop=True)
+    if df.empty:
+        return empty, spam
+
+    labels, scores, confidences = sentiment.classify(
+        df["clean_comment"].tolist(), engine, target, llm_model, use_rules
+    )
+    df["sentiment"] = labels
+    df["sentiment_score"] = scores
+    df["confidence"] = confidences
+
+    return df[ANALYSIS_COLUMNS].reset_index(drop=True), spam.reset_index(drop=True)
 
 
 def plot_distribution(df: pd.DataFrame, path: Path) -> pd.Series:
@@ -157,22 +113,58 @@ def plot_distribution(df: pd.DataFrame, path: Path) -> pd.Series:
     return counts
 
 
-def save_results(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str]) -> None:
-    """Export classified comments, the sentiment chart and EDA outputs."""
+def export_review_sample(df: pd.DataFrame, path: Path, per_label: int = 35) -> None:
+    """Stratified sample with an empty manual_label column to measure real accuracy."""
+    parts = [group.sample(min(len(group), per_label), random_state=42) for _, group in df.groupby("sentiment")]
+    sample = pd.concat(parts)[["comment_id", "clean_comment", "sentiment", "sentiment_score", "confidence"]]
+    sample = sample.assign(manual_label="").sample(frac=1, random_state=1)
+    sample.to_csv(path, index=False, encoding="utf-8-sig")
+
+
+def evaluate(labels_path: Path, output_dir: Path) -> None:
+    """Compare manual_label values with the labels in classified_comments.csv (matched by comment_id)."""
+    labelled = pd.read_csv(labels_path)
+    labelled = labelled[labelled["manual_label"].notna() & (labelled["manual_label"].astype(str).str.strip() != "")]
+    if labelled.empty:
+        print("No manual_label values found. Fill the manual_label column with Positive, Neutral or Negative.")
+        return
+    labelled = labelled.assign(manual_label=labelled["manual_label"].astype(str).str.strip().str.capitalize())
+
+    classified_path = output_dir / "classified_comments.csv"
+    if classified_path.exists() and "comment_id" in labelled:
+        current = pd.read_csv(classified_path)[["comment_id", "sentiment"]]
+        labelled = labelled.drop(columns=["sentiment"], errors="ignore").merge(current, on="comment_id")
+    if labelled.empty:
+        print("None of the labelled comments appear in classified_comments.csv.")
+        return
+
+    accuracy = (labelled["manual_label"] == labelled["sentiment"]).mean()
+    print(f"Accuracy on {len(labelled)} manually labelled comments: {accuracy * 100:.1f}%")
+    print("\nRows = your label, columns = model label:")
+    print(pd.crosstab(labelled["manual_label"], labelled["sentiment"]))
+
+
+def save_results(df: pd.DataFrame, spam: pd.DataFrame, output_dir: Path, extra_stopwords: set[str]) -> None:
+    """Export classified comments, review sample, sentiment chart and EDA outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "classified_comments.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
     print(f"\nClassified comments saved to: {csv_path}")
 
+    if not spam.empty:
+        spam.to_csv(output_dir / "spam_comments.csv", index=False, encoding="utf-8-sig")
+        print(f"{len(spam)} spam comments removed (saved to spam_comments.csv).")
+
     if df.empty:
         print("No comments were available to chart.")
         return
 
-    counts = plot_distribution(df, output_dir / "sentiment_distribution.png")
-    print(f"Sentiment chart saved to: {output_dir / 'sentiment_distribution.png'}")
+    export_review_sample(df, output_dir / "review_sample.csv")
+    print("Review sample saved to review_sample.csv (fill manual_label, then run --evaluate).")
 
+    counts = plot_distribution(df, output_dir / "sentiment_distribution.png")
     eda.run_eda(df, output_dir, extra_stopwords)
-    print(f"EDA outputs saved to: {output_dir}")
+    print(f"Charts and EDA outputs saved to: {output_dir}")
 
     print("\nSentiment summary:")
     for label, count in counts.items():
@@ -182,34 +174,32 @@ def save_results(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str]) 
         print(
             f"\nWARNING: only {len(df)} unique comments after cleaning; "
             f"the project requires at least {MIN_REQUIRED_COMMENTS}. "
-            "Add more videos with --videos or raise --max-comments."
+            "Fetch more comments with fetch.py first."
         )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="YouTube Comment Sentiment Analyzer")
-    parser.add_argument("--videos", nargs="+", help="One or more YouTube video URLs or IDs")
-    parser.add_argument(
-        "--max-comments", type=int, default=DEFAULT_TARGET,
-        help=f"Total comments to collect across all videos (default {DEFAULT_TARGET})",
-    )
-    parser.add_argument(
-        "--order", choices=["relevance", "time"], default="relevance",
-        help="Comment ordering requested from the API (default relevance)",
-    )
+    parser = argparse.ArgumentParser(description="YouTube Comment Sentiment Analyzer (run fetch.py first)")
+    parser.add_argument("--input", default="output/raw_comments.csv", help="Comments CSV created by fetch.py")
+    parser.add_argument("--evaluate", help="Labelled review CSV (manual_label filled); compares with classified_comments.csv")
     parser.add_argument(
         "--engine", choices=sentiment.ENGINES, default="xlmr",
-        help="xlmr = multilingual transformer (English, Roman Urdu, Urdu, Hindi, etc.); vader = English only",
+        help="xlmr = local multilingual model + stance rules; claude = LLM, best for sarcasm "
+             "(needs ANTHROPIC_API_KEY); vader = English only",
     )
+    parser.add_argument(
+        "--target", default=sentiment.DEFAULT_TARGET,
+        help="What the sentiment is about, e.g. 'the Gillette ad and brand' (used by --engine claude)",
+    )
+    parser.add_argument("--llm-model", default=sentiment.DEFAULT_LLM_MODEL, help="Claude model for --engine claude")
+    parser.add_argument("--no-rules", action="store_true", help="Disable the stance rules (local engines)")
     parser.add_argument(
         "--stopwords", nargs="*", default=[],
-        help="Extra words to hide from the top-words chart (brand names, channel names)",
+        help="Extra words to hide from the word charts (brand names, channel names)",
     )
     parser.add_argument("--output-dir", default="output", help="Folder for results")
-    parser.add_argument(
-        "--demo", action="store_true",
-        help="Use a synthetic offline dataset to test the pipeline (no API key needed)",
-    )
+    parser.add_argument("--demo", action="store_true", help="Use a synthetic offline dataset")
+    parser.add_argument("--demo-size", type=int, default=2500, help="Number of demo comments")
     return parser.parse_args()
 
 
@@ -220,6 +210,10 @@ def main() -> None:
     print("YouTube Comment Sentiment Analyzer")
     print("=" * 50)
 
+    if args.evaluate:
+        evaluate(Path(args.evaluate), Path(args.output_dir))
+        return
+
     output_dir = Path(args.output_dir)
 
     try:
@@ -228,52 +222,31 @@ def main() -> None:
 
             output_dir = Path("output_demo") if args.output_dir == "output" else output_dir
             print("\nDEMO MODE: using synthetic comments, not real YouTube data.")
-            comments = generate_demo_comments(args.max_comments)
+            comments = generate_demo_comments(args.demo_size)
         else:
-            videos = args.videos
-            if not videos:
-                raw = input("\nEnter one or more YouTube video URLs or IDs (space separated): ")
-                videos = raw.split()
-            if not videos:
-                print("No video URL or ID provided. Exiting.")
+            input_path = Path(args.input)
+            if not input_path.exists():
+                print(f"\n{input_path} not found. Run fetch.py first to collect comments.")
                 return
-            if args.max_comments < 1:
-                print("Please enter a number greater than zero.")
-                return
+            comments = pd.read_csv(input_path).to_dict("records")
 
-            video_ids = [extract_video_id(v) for v in videos]
-            print("\nFetching comments...")
-            comments = collect_from_videos(video_ids, args.max_comments, args.order)
-
-        print(f"Fetched {len(comments)} comments.")
+        print(f"Loaded {len(comments)} comments.")
         if not comments:
-            print("No comments returned. Comments may be disabled or unavailable.")
+            print("The comments file is empty.")
             return
 
         print(f"Analyzing sentiment (engine: {args.engine})...")
-        results = analyze_comments(comments, args.engine)
+        results, spam = analyze_comments(
+            comments, args.engine, args.target, args.llm_model, not args.no_rules
+        )
         print(f"{len(results)} unique comments remain after cleaning.")
-        extra = {w.lower() for w in args.stopwords}
-        save_results(results, output_dir, extra)
+        save_results(results, spam, output_dir, {w.lower() for w in args.stopwords})
         print("\nDone!")
 
-    except ValueError as error:
-        print(f"\nConfiguration or input error: {error}")
+    except (ValueError, RuntimeError) as error:
+        print(f"\nError: {error}")
     except ImportError as error:
         print(f"\nMissing dependency: {error}. Run: pip install -r requirements.txt")
-    except Exception as error:
-        try:
-            from googleapiclient.errors import HttpError
-        except ImportError:
-            HttpError = ()
-        if HttpError and isinstance(error, HttpError):
-            print(f"\nYouTube API error: {error}")
-            print(
-                "Check your API key, API quota, video ID, and whether comments "
-                "are available for the video."
-            )
-        else:
-            print(f"\nUnexpected error: {error}")
 
 
 if __name__ == "__main__":
