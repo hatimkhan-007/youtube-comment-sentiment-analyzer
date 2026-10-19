@@ -7,4 +7,5 @@ matplotlib>=3.9
 transformers>=4.40
 torch>=2.2
 sentencepiece>=0.2
+anthropic>=0.40
 pytest>=8.0
