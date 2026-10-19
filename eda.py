@@ -1,3 +1,4 @@
+import math
 import re
 from collections import Counter
 from pathlib import Path
@@ -5,11 +6,18 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from sentiment import NEGATIVE_THRESHOLD, POSITIVE_THRESHOLD
+
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
+plt.rcParams["font.family"] = [
+    "DejaVu Sans", "Nirmala UI", "Segoe UI", "Arial Unicode MS", "Noto Sans Arabic", "Noto Sans Devanagari",
+]
 
 LABELS = ["Positive", "Neutral", "Negative"]
 COLORS = {"Positive": "#2e9e5b", "Neutral": "#8c8c8c", "Negative": "#d64545"}
@@ -19,10 +27,12 @@ about after all also and any are because been but can could did does for from ge
 have her him his how into its just like me my not now one our out some than that the their them
 then there they this too was we were what when which who will with would you your dont thats
 ive youre video very made add
+dont didnt doesnt isnt wasnt arent wont cant couldnt wouldnt shouldnt havent hasnt
+why where since being years still even only ever want make think people say said really
 """.split())
 
 ROMAN_URDU_STOPWORDS = set("""
-hai hain hy h ho hun hu tha thi the thay hota hoti hota hoga hogi ka ki ke ky ko se sy ne me
+hai hain hy h ho hun hu tha thi the thay hota hoti hoga hogi ka ki ke ky ko se sy ne me
 mein main mai pe par per ye yeh wo woh yahan wahan aur or bhi to toh kya kia kiya kon kaun
 kyun kyu nahi nhi nahin na bhot bohat bohot bahut buhat kar kr karo kare karna karta karti
 mera meri mere tera teri tere tum tu aap ap hum hamara apna apni apne liye lye wala wali wale
@@ -31,7 +41,7 @@ hona gaya gayi gaye raha rahi rahe diya di diye lag laga lagi
 """.split())
 
 STOPWORDS = ENGLISH_STOPWORDS | ROMAN_URDU_STOPWORDS
-WORD_PATTERN = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+WORD_PATTERN = re.compile(r"(?:[^\W\d_]|[\u0900-\u097F\u0600-\u06FF])+")
 REPEAT_PATTERN = re.compile(r"(.)\1{2,}")
 
 
@@ -51,11 +61,12 @@ def summary_tables(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     })
     by_sentiment = df.groupby("sentiment").agg(
         mean_score=("sentiment_score", "mean"),
+        mean_confidence=("confidence", "mean"),
         mean_words=("word_count", "mean"),
         mean_likes=("like_count", "mean"),
         median_likes=("like_count", "median"),
     ).reindex(LABELS).round(3)
-    overall = df[["sentiment_score", "char_count", "word_count", "like_count"]].describe().round(3)
+    overall = df[["sentiment_score", "confidence", "char_count", "word_count", "like_count"]].describe().round(3)
     return {
         "sentiment_distribution": distribution,
         "stats_by_sentiment": by_sentiment,
@@ -63,13 +74,41 @@ def summary_tables(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
-def top_words(df: pd.DataFrame, label: str, n: int = 10, extra_stopwords: set[str] | None = None) -> list[tuple[str, int]]:
+def distinctive_words(
+    df: pd.DataFrame, n: int = 10, extra_stopwords: set[str] | None = None, min_total: int = 5
+) -> dict[str, list[tuple[str, int]]]:
+    """Top words per sentiment ranked by count x log-lift, so words shared by every class drop out."""
     blocked = STOPWORDS | (extra_stopwords or set())
-    counter: Counter = Counter()
-    for text in df.loc[df["sentiment"] == label, "clean_comment"]:
-        words = (REPEAT_PATTERN.sub(r"\1\1", w) for w in WORD_PATTERN.findall(text.lower()))
-        counter.update(w for w in words if w not in blocked)
-    return counter.most_common(n)
+    counters: dict[str, Counter] = {label: Counter() for label in LABELS}
+    for label in LABELS:
+        for text in df.loc[df["sentiment"] == label, "clean_comment"]:
+            text = text.lower().replace("'", "").replace("’", "").replace("`", "")
+            words = (REPEAT_PATTERN.sub(r"\1\1", w) for w in WORD_PATTERN.findall(text))
+            counters[label].update(w for w in words if w not in blocked and len(w) >= (3 if w.isascii() else 2))
+
+    total: Counter = Counter()
+    for counter in counters.values():
+        total.update(counter)
+    n_all = sum(total.values()) or 1
+
+    result = {}
+    for label in LABELS:
+        counter = counters[label]
+        n_class = sum(counter.values()) or 1
+        scored = []
+        for word, count in counter.items():
+            if total[word] < min_total:
+                continue
+            lift = (count / n_class) / (total[word] / n_all)
+            if lift > 1.0:
+                scored.append((count * math.log(lift), word, count))
+        scored.sort(reverse=True)
+        picks = [(word, count) for _, word, count in scored[:n]]
+        if len(picks) < n:
+            used = {word for word, _ in picks}
+            picks += [(w, c) for w, c in counter.most_common() if w not in used][: n - len(picks)]
+        result[label] = picks
+    return result
 
 
 def get_top_negative_comments(df: pd.DataFrame, n: int = 5) -> pd.DataFrame:
@@ -132,12 +171,13 @@ def plot_sentiment_over_time(df: pd.DataFrame, path: Path) -> bool:
     )
     table = table.reindex(pd.period_range(table.index.min(), table.index.max(), freq=freq), fill_value=0)
     labels = table.index.astype(str)
+    x = range(len(table))
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.bar(range(len(table)), table["Positive"], color=COLORS["Positive"], label="Positive", width=0.85)
-    ax.bar(range(len(table)), table["Neutral"], bottom=table["Positive"], color=COLORS["Neutral"], label="Neutral", width=0.85)
+    ax.bar(x, table["Positive"], color=COLORS["Positive"], label="Positive", width=0.85)
+    ax.bar(x, table["Neutral"], bottom=table["Positive"], color=COLORS["Neutral"], label="Neutral", width=0.85)
     ax.bar(
-        range(len(table)), table["Negative"], bottom=table["Positive"] + table["Neutral"],
+        x, table["Negative"], bottom=table["Positive"] + table["Neutral"],
         color=COLORS["Negative"], label="Negative", width=0.85,
     )
     step = max(1, len(table) // 12)
@@ -154,14 +194,15 @@ def plot_sentiment_over_time(df: pd.DataFrame, path: Path) -> bool:
     return True
 
 
-def plot_top_words(df: pd.DataFrame, path: Path, extra_stopwords: set[str] | None = None) -> None:
+def plot_top_words(words_by_label: dict[str, list[tuple[str, int]]], path: Path) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5))
     for ax, label in zip(axes, LABELS):
-        words = top_words(df, label, extra_stopwords=extra_stopwords)
+        words = words_by_label[label]
         if words:
             names, values = zip(*words)
             ax.barh(names[::-1], values[::-1], color=COLORS[label])
-        ax.set_title(f"Top words: {label}")
+        ax.set_title(f"Distinctive words: {label}")
+        ax.set_xlabel("Occurrences")
         ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -172,6 +213,7 @@ def run_eda(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str] | None
     """Write EDA tables, a text summary and supporting charts to output_dir."""
     data = add_features(df)
     tables = summary_tables(data)
+    words_by_label = distinctive_words(data, extra_stopwords=extra_stopwords)
 
     lines = [f"Total unique comments analyzed: {len(data)}", ""]
     for name, table in tables.items():
@@ -179,8 +221,7 @@ def run_eda(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str] | None
         lines += [name.replace("_", " ").title(), table.to_string(), ""]
 
     for label in LABELS:
-        words = top_words(data, label, extra_stopwords=extra_stopwords)
-        lines.append(f"Top words ({label}): " + ", ".join(f"{w} ({c})" for w, c in words))
+        lines.append(f"Distinctive words ({label}): " + ", ".join(f"{w} ({c})" for w, c in words_by_label[label]))
 
     top_neg = get_top_negative_comments(data, n=5)
     if not top_neg.empty:
@@ -192,5 +233,5 @@ def run_eda(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str] | None
 
     plot_score_histogram(data, output_dir / "eda_score_histogram.png")
     plot_length_by_sentiment(data, output_dir / "eda_length_by_sentiment.png")
-    plot_top_words(data, output_dir / "eda_top_words.png", extra_stopwords)
+    plot_top_words(words_by_label, output_dir / "eda_top_words.png")
     plot_sentiment_over_time(data, output_dir / "eda_sentiment_over_time.png")
