@@ -10,20 +10,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 from dotenv import load_dotenv
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 import eda
+import sentiment
 
 load_dotenv()
 
 MIN_REQUIRED_COMMENTS = 2000
 DEFAULT_TARGET = 2500
-POSITIVE_THRESHOLD = 0.05
-NEGATIVE_THRESHOLD = -0.05
 LABELS = ["Positive", "Neutral", "Negative"]
 LABEL_COLORS = {"Positive": "#2e9e5b", "Neutral": "#8c8c8c", "Negative": "#d64545"}
-
-analyzer = SentimentIntensityAnalyzer()
 
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+")
 WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -103,27 +99,13 @@ def collect_from_videos(video_ids: list[str], target: int, order: str) -> list[d
 
 
 def clean_text(text: str) -> str:
-    """Normalize a raw comment for analysis: unescape HTML, drop URLs, collapse whitespace."""
+    """Normalize a raw comment: unescape HTML, drop URLs, collapse whitespace."""
     text = html.unescape(str(text))
     text = URL_PATTERN.sub(" ", text)
     return WHITESPACE_PATTERN.sub(" ", text).strip()
 
 
-def classify_sentiment(comment: str) -> tuple[str, float]:
-    """Return a sentiment label and VADER compound score."""
-    compound = analyzer.polarity_scores(comment)["compound"]
-
-    if compound >= POSITIVE_THRESHOLD:
-        label = "Positive"
-    elif compound <= NEGATIVE_THRESHOLD:
-        label = "Negative"
-    else:
-        label = "Neutral"
-
-    return label, compound
-
-
-def analyze_comments(comments: list[dict]) -> pd.DataFrame:
+def analyze_comments(comments: list[dict], engine: str = "xlmr") -> pd.DataFrame:
     """Clean comment text and add sentiment labels and scores."""
     columns = [
         "video_id", "comment", "clean_comment", "author", "published_at",
@@ -146,9 +128,8 @@ def analyze_comments(comments: list[dict]) -> pd.DataFrame:
     df = df[df["clean_comment"] != ""]
     df = df.drop_duplicates(subset=["clean_comment"]).copy()
 
-    results = df["clean_comment"].apply(classify_sentiment)
-    df["sentiment"] = results.apply(lambda result: result[0])
-    df["sentiment_score"] = results.apply(lambda result: result[1])
+    df["sentiment_score"] = sentiment.score_texts(df["clean_comment"].tolist(), engine)
+    df["sentiment"] = df["sentiment_score"].apply(sentiment.label_from_score)
 
     return df[columns].reset_index(drop=True)
 
@@ -168,7 +149,7 @@ def plot_distribution(df: pd.DataFrame, path: Path) -> pd.Series:
     ax.set_title(f"YouTube Comment Sentiment Distribution (n={total})")
     ax.set_xlabel("Sentiment")
     ax.set_ylabel("Number of comments")
-    ax.set_ylim(0, counts.max() * 1.18)
+    ax.set_ylim(0, max(counts.max(), 1) * 1.18)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -176,7 +157,7 @@ def plot_distribution(df: pd.DataFrame, path: Path) -> pd.Series:
     return counts
 
 
-def save_results(df: pd.DataFrame, output_dir: Path) -> None:
+def save_results(df: pd.DataFrame, output_dir: Path, extra_stopwords: set[str]) -> None:
     """Export classified comments, the sentiment chart and EDA outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "classified_comments.csv"
@@ -190,12 +171,12 @@ def save_results(df: pd.DataFrame, output_dir: Path) -> None:
     counts = plot_distribution(df, output_dir / "sentiment_distribution.png")
     print(f"Sentiment chart saved to: {output_dir / 'sentiment_distribution.png'}")
 
-    eda.run_eda(df, output_dir)
+    eda.run_eda(df, output_dir, extra_stopwords)
     print(f"EDA outputs saved to: {output_dir}")
 
     print("\nSentiment summary:")
-    for sentiment, count in counts.items():
-        print(f"{sentiment}: {count} comments ({count / len(df) * 100:.1f}%)")
+    for label, count in counts.items():
+        print(f"{label}: {count} comments ({count / len(df) * 100:.1f}%)")
 
     if len(df) < MIN_REQUIRED_COMMENTS:
         print(
@@ -215,6 +196,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--order", choices=["relevance", "time"], default="relevance",
         help="Comment ordering requested from the API (default relevance)",
+    )
+    parser.add_argument(
+        "--engine", choices=sentiment.ENGINES, default="xlmr",
+        help="xlmr = multilingual transformer (English, Roman Urdu, Urdu, Hindi, etc.); vader = English only",
+    )
+    parser.add_argument(
+        "--stopwords", nargs="*", default=[],
+        help="Extra words to hide from the top-words chart (brand names, channel names)",
     )
     parser.add_argument("--output-dir", default="output", help="Folder for results")
     parser.add_argument(
@@ -261,14 +250,17 @@ def main() -> None:
             print("No comments returned. Comments may be disabled or unavailable.")
             return
 
-        print("Analyzing sentiment...")
-        results = analyze_comments(comments)
+        print(f"Analyzing sentiment (engine: {args.engine})...")
+        results = analyze_comments(comments, args.engine)
         print(f"{len(results)} unique comments remain after cleaning.")
-        save_results(results, output_dir)
+        extra = {w.lower() for w in args.stopwords}
+        save_results(results, output_dir, extra)
         print("\nDone!")
 
     except ValueError as error:
         print(f"\nConfiguration or input error: {error}")
+    except ImportError as error:
+        print(f"\nMissing dependency: {error}. Run: pip install -r requirements.txt")
     except Exception as error:
         try:
             from googleapiclient.errors import HttpError
