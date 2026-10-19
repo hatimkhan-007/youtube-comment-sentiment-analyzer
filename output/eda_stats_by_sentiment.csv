@@ -1,0 +1,4 @@
+sentiment,mean_score,mean_confidence,mean_words,mean_likes,median_likes
+Positive,0.591,0.663,12.853,72.712,3.0
+Neutral,-0.005,0.59,11.388,53.246,3.0
+Negative,-0.718,0.759,17.918,62.647,4.0

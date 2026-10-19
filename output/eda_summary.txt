@@ -1,0 +1,40 @@
+Total unique comments analyzed: 2600
+
+Sentiment Distribution
+           count  percent
+sentiment                
+Positive     375    14.42
+Neutral      366    14.08
+Negative    1859    71.50
+
+Stats By Sentiment
+           mean_score  mean_confidence  mean_words  mean_likes  median_likes
+sentiment                                                                   
+Positive        0.591            0.663      12.853      72.712           3.0
+Neutral        -0.005            0.590      11.388      53.246           3.0
+Negative       -0.718            0.759      17.918      62.647           4.0
+
+Overall Descriptive Stats
+       sentiment_score  confidence  char_count  word_count  like_count
+count         2600.000    2600.000    2600.000    2600.000    2600.000
+mean            -0.429       0.722      89.370      16.268      62.775
+std              0.534       0.180      96.126      17.237     488.392
+min             -1.000       0.344       1.000       1.000       0.000
+25%             -0.877       0.556      37.000       7.000       2.000
+50%             -0.600       0.745      64.000      12.000       4.000
+75%             -0.038       0.893     108.000      19.000       7.000
+max              1.000       0.969    1678.000     291.000   10125.000
+
+Distinctive words (Positive): best (33), great (28), love (20), beard (22), thanks (21), boys (27), man (34), better (19), message (14), loved (7)
+Distinctive words (Neutral): meme (32), boys (25), lol (19), tomorrow (13), dislikes (14), likes (8), today (14), haha (6), girls (7), memes (5)
+Distinctive words (Negative): never (258), toxic (153), bought (103), again (117), products (122), buying (80), masculinity (107), stop (57), bad (63), product (109)
+
+Top Negative Comments Caught:
+- [Score: -0.22, Likes: 10125] This is the only channel that actually still shows this commercial, it's like Gillette has completely erased it from history.
+Gillette, the Brand that we Forget
+- [Score: -0.58, Likes: 9221] Thanks Gillette, maybe now I can finally learn to live without raping or bullying everyone I meet. Is robbery still okay though, cause your razor blades are pretty expensive.
+- [Score: -0.48, Likes: 8136] A moment of silence for all the great deleted comments and the deleted dislikes😔🙏🕯
+- [Score: -0.92, Likes: 7364] While Gilette charges double for pink razors...
+
+Hypocrites
+- [Score: -0.18, Likes: 5218] You know its 2019 when shaving cream gets political
