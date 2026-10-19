@@ -1,6 +1,10 @@
 pandas>=2.0
+numpy>=1.26
 google-api-python-client>=2.100
 python-dotenv>=1.0
 vaderSentiment>=3.3.2
-matplotlib>=3.8
+matplotlib>=3.9
+transformers>=4.40
+torch>=2.2
+sentencepiece>=0.2
 pytest>=8.0
