@@ -105,6 +105,23 @@ From one analysed video: 2,631 comments fetched, 2,600 unique comments after cle
 | Neutral | 366 | 14.1% |
 | Negative | 1,859 | 71.5% |
 
+## Charts
+
+### Sentiment distribution
+![Sentiment distribution](output/sentiment_distribution.png)
+
+### Sentiment score histogram
+![Sentiment score histogram](output/eda_score_histogram.png)
+
+### Comment length by sentiment
+![Comment length by sentiment](output/eda_length_by_sentiment.png)
+
+### Sentiment over time
+![Sentiment over time](output/eda_sentiment_over_time.png)
+
+### Top words per sentiment
+![Top words per sentiment](output/eda_top_words.png)
+
 ## Validating accuracy
 
 ```bash
